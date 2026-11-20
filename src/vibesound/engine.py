@@ -299,6 +299,21 @@ class Session:
         )
         return self._report(result, label)
 
+    def remove_swoosh(self, start: Time, end: Time, low_hz: float = 1500.0, high_hz: float = 20000.0,
+                      max_reduction_db: float = 15.0, protect_db: float = 7.0) -> dict:
+        s, e = self._range(start, end)
+        if e - s > 4.0:
+            raise ValueError("remove_swoosh compares the region with the audio just around it and is meant "
+                             "for bursts up to a few seconds. For steady noise use denoise.")
+        params = {"low_hz": low_hz, "high_hz": high_hz, "max_reduction_db": max_reduction_db,
+                  "protect_db": protect_db}
+        label = f"remove swoosh above {low_hz:g} Hz (up to {abs(max_reduction_db):g} dB)"
+        result = self._p().apply_edit(
+            s, e, lambda seg, sr, ra, rb: dsp.reduce_noise_burst(seg, sr, ra, rb, **params),
+            op="remove_swoosh", params=params, label=label, xfade_ms=40.0, context_s=1.0,
+        )
+        return self._report(result, label)
+
     def remove_thump(self, time: Time, width_ms: float = 140.0, max_hz: float = 150.0,
                      strength: float = 1.0) -> dict:
         t = parse_time(time)

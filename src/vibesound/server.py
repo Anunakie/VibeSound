@@ -26,7 +26,8 @@ The loop for every request:
    and use `analyze` (compare with a nearby passage that sounds fine) or `find_problems` to pin down
    what and exactly where. Zoom: a second `view` of 1-3 s with a tighter fmin/fmax shows detail.
 2. FIX conservatively with the narrowest tool: reduce_mud / eq for tone over a passage,
-   remove_thump for pedal and bench thumps, remove_clicks for ticks, spectral_repair to rebuild a
+   remove_thump for pedal and bench thumps, remove_swoosh for pedal/damper whooshes,
+   remove_clicks for ticks, spectral_repair to rebuild a
    specific time/frequency box (squeaks, creaks, hammer/action noise), denoise for steady noise,
    inpaint to regenerate a very short stretch, copy_from_region to borrow a matching passage.
    Start gentle (3-4 dB tone moves). It is easier for him to ask for more than to un-hear damage.
@@ -216,6 +217,21 @@ def remove_thump(time: Time, width_ms: float = 140.0, max_hz: float = 150.0, str
     find_problems or a zoomed view. Raise max_hz if the picture shows the thump reaching higher.
     """
     return _text(session.remove_thump(time, width_ms, max_hz, strength))
+
+
+@tool
+def remove_swoosh(start: Time, end: Time, low_hz: float = 1500.0, high_hz: float = 20000.0,
+                  max_reduction_db: float = 15.0, protect_db: float = 7.0) -> str:
+    """Remove a passing whoosh of broadband noise: pedal/damper swoosh, sleeve or breath noise.
+
+    In view (try fmin=500, floor_db=-125, ceiling_db=-65) a swoosh is a soft cloud across the
+    highs for 0.1-0.5 s, unlike notes, which are thin horizontal lines. The cloud is turned back
+    down to the noise level just before and after the region, and the note lines are kept.
+    Bracket the cloud closely: the 250 ms on each side are used as the "clean" reference.
+    Lower low_hz if the cloud reaches lower; lower protect_db only if notes get dulled.
+    Creates a new version.
+    """
+    return _text(session.remove_swoosh(start, end, low_hz, high_hz, max_reduction_db, protect_db))
 
 
 @tool

@@ -312,3 +312,21 @@ def test_pictures_and_listen_page(clean, write_wav):
     assert len(out["clips"]) == 2 and all(c.split("previews")[-1][1:] in page for c in out["clips"])
     assert sf.info(out["clips"][0]).duration == pytest.approx(10.0, abs=0.01)
     assert len(s.history()["versions"]) == 2
+
+
+def test_swoosh_is_removed_but_partials_stay(clean, write_wav):
+    rng = np.random.default_rng(7)
+    dirty = clean.copy()
+    i, n = int(6.3 * SR), int(0.35 * SR)
+    sos = signal.butter(2, 2000, btype="high", fs=SR, output="sos")
+    cloud = signal.sosfilt(sos, rng.normal(0, 0.004, (n, 2)), axis=0) * np.hanning(n)[:, None]
+    dirty[i:i + n] += cloud
+
+    s = Session()
+    s.open_project(write_wav(dirty))
+    s.remove_swoosh(6.25, 6.70)
+    fixed = s.project.audio()
+    win = slice(i + n // 4, i + 3 * n // 4)
+    assert band_db(fixed[win] - clean[win], 2500, 12000) < band_db(dirty[win] - clean[win], 2500, 12000) - 4
+    assert abs(band_db(fixed[win], 80, 1200) - band_db(clean[win], 80, 1200)) < 0.1
+    assert np.array_equal(fixed[: int(6.0 * SR)], dirty[: int(6.0 * SR)])

@@ -184,6 +184,44 @@ def spectral_repair(segment, sr, ra, rb, *, low_hz=20.0, high_hz=20000.0, mode="
     return istft(S, sr, n_fft, hop, len(segment))
 
 
+def reduce_noise_burst(segment, sr, ra, rb, *, low_hz=1500.0, high_hz=20000.0, max_reduction_db=15.0,
+                       context_ms=250.0, protect_db=7.0, win_ms=46.0):
+    """Turn a passing burst of broadband noise (pedal/damper swoosh, breath, cloth) back down to the
+    noise floor of the audio around it, leaving the notes alone.
+
+    Notes are narrow peaks along frequency; a swoosh is a smooth cloud. A median filter along
+    frequency measures the cloud while ignoring the peaks. Wherever the cloud is louder than
+    it is just before and after the region, the non-peak bins are turned down by the excess.
+    Bins standing ``protect_db`` above the cloud are treated as note partials and kept.
+    """
+    S, freqs, times, n_fft, hop = stft(segment, sr, win_ms, overlap=8)
+    mag = np.abs(S)
+    bin_hz = freqs[1] - freqs[0]
+    width = int(round(350.0 / bin_hz)) | 1
+    cloud = ndimage.median_filter(mag, size=(1, width, 1), mode="nearest")
+    cloud = ndimage.uniform_filter(cloud, size=(1, 5, 3), mode="nearest")
+
+    half_win = n_fft / (2 * sr)
+    t0, t1 = ra / sr, rb / sr
+    ctx = context_ms * 1e-3
+    ref = np.flatnonzero(((times < t0 - half_win) & (times >= t0 - half_win - ctx))
+                         | ((times > t1 + half_win) & (times <= t1 + half_win + ctx)))
+    if len(ref) < 4:
+        return segment
+    floor = np.percentile(cloud[:, :, ref], 35, axis=2)[:, :, None]
+
+    excess = np.clip(floor / (cloud + EPS), 10 ** (-abs(max_reduction_db) / 20.0), 1.0)
+    # 0 for bins at the cloud's level, 1 for bins well above it (partials, attacks).
+    peak_db = 20 * np.log10((mag + EPS) / (cloud + EPS))
+    keep = np.clip((peak_db - protect_db * 0.5) / (protect_db * 0.5), 0.0, 1.0)
+    keep = ndimage.maximum_filter(keep, size=(1, 3, 1))  # protect a partial's skirts too
+    g = excess + (1.0 - excess) * keep
+    g = ndimage.uniform_filter(g, size=(1, 3, 3), mode="nearest")
+    w = band_weight(freqs, low_hz, high_hz, 0.25)[None, :, None]
+    g = 1.0 + w * (g - 1.0)
+    return istft(S * g, sr, n_fft, hop, len(segment))
+
+
 # --------------------------------------------------------------------- denoise
 
 
