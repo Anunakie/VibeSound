@@ -235,6 +235,20 @@ def remove_swoosh(start: Time, end: Time, low_hz: float = 1500.0, high_hz: float
 
 
 @tool
+def remove_all_swooshes(start: Time | None = None, end: Time | None = None, low_hz: float = 1500.0,
+                        max_reduction_db: float = 15.0, sensitivity_db: float = 2.5,
+                        protect_db: float = 7.0) -> str:
+    """Find and remove every pedal/damper swoosh in the whole song (or a range) in one pass.
+
+    Each band of the highs is compared with its own rolling noise floor; clouds that rise above
+    it for longer than a hammer attack are turned back down, note lines are kept. Returns how
+    many it found and the strongest, with times. Lower sensitivity_db (1.5) catches fainter
+    ones at more risk to attacks; raise it (4) to be more careful. Creates a new version.
+    """
+    return _text(session.remove_all_swooshes(start, end, low_hz, max_reduction_db, sensitivity_db, protect_db))
+
+
+@tool
 def remove_clicks(start: Time, end: Time, sensitivity: float = 10.0, times: list[Time] | None = None,
                   width_ms: float = 1.5) -> str:
     """Remove clicks and ticks in a range by re-synthesising a few milliseconds each.

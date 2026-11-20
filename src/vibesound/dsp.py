@@ -222,6 +222,94 @@ def reduce_noise_burst(segment, sr, ra, rb, *, low_hz=1500.0, high_hz=20000.0, m
     return istft(S * g, sr, n_fft, hop, len(segment))
 
 
+def _swoosh_gain(S, freqs, hop_s, *, low_hz, max_reduction_db, protect_db, min_ms, margin_db, window_s):
+    """Per-bin gain that pulls sustained broadband bursts down to the rolling noise floor.
+
+    Returns (gain, burst_db) where burst_db is the per-frame reduction averaged over the
+    bands, a convenient "how much swoosh is here" curve.
+    """
+    mag = np.abs(S)
+    bin_hz = freqs[1] - freqs[0]
+    width = int(round(350.0 / bin_hz)) | 1
+    cloud = ndimage.median_filter(mag, size=(1, width, 1), mode="nearest")
+
+    # The cloud is smooth along frequency, so track it in third-octave bands (cheap and robust).
+    edges = np.geomspace(max(low_hz * 0.8, 200.0), freqs[-1], int(np.ceil(np.log2(freqs[-1] / low_hz) * 3)) + 2)
+    idx = np.clip(np.searchsorted(freqs, edges), 1, len(freqs) - 1)
+    bands = [(idx[i], max(idx[i + 1], idx[i] + 1)) for i in range(len(idx) - 1)]
+    centres = np.array([0.5 * (a + b - 1) for a, b in bands])
+    level = np.stack([20 * np.log10(np.sqrt(np.mean(cloud[:, a:b] ** 2, axis=1)) + EPS) for a, b in bands], axis=1)
+    level = ndimage.uniform_filter1d(level, size=5, axis=2, mode="nearest")
+
+    win = max(5, int(round(window_s / hop_s)) | 1)
+    step = max(1, win // 60)  # the floor moves slowly: evaluate it on a thinned time grid
+    thin = level[:, :, ::step]
+    floor = ndimage.percentile_filter(thin, 25, size=(1, 1, max(3, (win // step) | 1)), mode="nearest")
+    floor = np.repeat(floor, step, axis=2)[:, :, : level.shape[2]]
+    if floor.shape[2] < level.shape[2]:
+        floor = np.pad(floor, ((0, 0), (0, 0), (0, level.shape[2] - floor.shape[2])), mode="edge")
+
+    # Fades and digital silence would otherwise make ordinary quiet playing look like a burst.
+    floor = np.maximum(floor, np.median(level, axis=2, keepdims=True) - 12.0)
+    excess = np.maximum(level - floor - margin_db, 0.0)
+    # Opening along time: bursts shorter than min_ms (hammer attacks) drop out untouched.
+    k = max(1, int(round(min_ms * 1e-3 / hop_s)))
+    excess = ndimage.grey_opening(excess, size=(1, 1, k))
+    excess = np.minimum(excess, abs(max_reduction_db))
+    excess = ndimage.uniform_filter(excess, size=(1, 3, max(3, k // 2) | 1), mode="nearest")
+
+    n_bins = len(freqs)
+    from scipy.interpolate import interp1d
+
+    red = interp1d(centres, excess, axis=1, bounds_error=False,
+                   fill_value=(excess[:, 0], excess[:, -1]), assume_sorted=True)(np.arange(n_bins))
+    target = 10.0 ** (-red / 20.0)
+    peak_db = 20 * np.log10((mag + EPS) / (cloud + EPS))
+    keep = np.clip((peak_db - protect_db * 0.5) / (protect_db * 0.5), 0.0, 1.0)
+    keep = ndimage.maximum_filter(keep, size=(1, 3, 1))
+    g = target + (1.0 - target) * keep
+    g = ndimage.uniform_filter(g, size=(1, 3, 3), mode="nearest")
+    w = band_weight(freqs, low_hz, freqs[-1] * 2, 0.25)[None, :, None]
+    sel = freqs >= low_hz
+    return 1.0 + w * (g - 1.0), excess.mean(axis=0)[np.array([a >= np.searchsorted(freqs, low_hz) for a, _ in bands])].mean(axis=0) if sel.any() else np.zeros(S.shape[2])
+
+
+def suppress_swooshes(segment, sr, ra, rb, *, low_hz=1500.0, max_reduction_db=15.0, protect_db=7.0,
+                      min_ms=80.0, margin_db=2.5, window_s=2.0, win_ms=46.0, report: dict | None = None):
+    """Find and turn down every swoosh in a long stretch (a whole song) in one pass.
+
+    Same idea as :func:`reduce_noise_burst`, but the "clean" reference is a rolling noise floor
+    (the quietest quarter of the surrounding two seconds, per band), so nothing has to be
+    located by hand. Bursts shorter than ``min_ms`` are left alone, which keeps hammer attacks.
+    Works through the audio in overlapping blocks to bound memory.
+    """
+    n = len(segment)
+    block, pad = int(12.0 * sr), int(1.5 * sr)
+    out = np.zeros_like(segment)
+    norm = np.zeros(n)
+    curve_t, curve_v = [], []
+    for b0 in range(0, n, block):
+        a, b = max(0, b0 - pad), min(n, b0 + block + pad)
+        S, freqs, times, n_fft, hop = stft(segment[a:b], sr, win_ms, overlap=8)
+        g, burst = _swoosh_gain(S, freqs, hop / sr, low_hz=low_hz, max_reduction_db=max_reduction_db,
+                                protect_db=protect_db, min_ms=min_ms, margin_db=margin_db, window_s=window_s)
+        y = istft(S * g, sr, n_fft, hop, b - a)
+        w = np.ones(b - a)
+        if a > 0:
+            w[:pad] = np.linspace(0, 1, pad, endpoint=False)
+        if b < n:
+            w[-pad:] = np.linspace(1, 0, pad, endpoint=False)
+        out[a:b] += y * w[:, None]
+        norm[a:b] += w
+        core = (times * sr + a >= b0) & (times * sr + a < b0 + block)
+        curve_t.append(times[core] + a / sr)
+        curve_v.append(burst[core])
+    if report is not None:
+        report["times"] = np.concatenate(curve_t)
+        report["reduction_db"] = np.concatenate(curve_v)
+    return out / np.maximum(norm, 1e-9)[:, None]
+
+
 # --------------------------------------------------------------------- denoise
 
 

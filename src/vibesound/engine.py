@@ -314,6 +314,42 @@ class Session:
         )
         return self._report(result, label)
 
+    def remove_all_swooshes(self, start: Time | None = None, end: Time | None = None, low_hz: float = 1500.0,
+                            max_reduction_db: float = 15.0, sensitivity_db: float = 2.5,
+                            protect_db: float = 7.0) -> dict:
+        p = self._p()
+        s, e = self._range(0.0 if start is None else start, p.duration if end is None else end)
+        params = {"low_hz": low_hz, "max_reduction_db": max_reduction_db, "margin_db": sensitivity_db,
+                  "protect_db": protect_db}
+        found: dict[str, Any] = {}
+        label = f"remove all swooshes above {low_hz:g} Hz"
+        a, _ = p.sample_range(s, e)
+
+        def fn(seg, sr, ra, rb):
+            out = dsp.suppress_swooshes(seg, sr, ra, rb, report=found, **params)
+            found["offset"] = (a - ra) / sr
+            return out
+
+        result = p.apply_edit(s, e, fn, op="remove_all_swooshes", params=params, label=label,
+                              xfade_ms=40.0, context_s=1.0)
+        from scipy import ndimage
+
+        times = found["times"] + found["offset"]
+        red = found["reduction_db"]
+        inside = (times >= s) & (times <= e)
+        labels, _count = ndimage.label((red > 2.0) & inside)
+        bursts = []
+        for sl in ndimage.find_objects(labels):
+            t0, t1 = float(times[sl[0].start]), float(times[sl[0].stop - 1])
+            bursts.append({"from": fmt_time(t0), "to": fmt_time(t1), "seconds": round(t0, 2),
+                           "reduced_db": round(float(red[sl].max()), 1)})
+        report = self._report(result, label)
+        strong = sorted(bursts, key=lambda b: -b["reduced_db"])[:40]
+        report |= {"swooshes_found": len(bursts),
+                   "strongest": sorted(strong, key=lambda b: b["seconds"]),
+                   "reading": "reduced_db is the average cut across the highs at each burst's peak."}
+        return report
+
     def remove_thump(self, time: Time, width_ms: float = 140.0, max_hz: float = 150.0,
                      strength: float = 1.0) -> dict:
         t = parse_time(time)

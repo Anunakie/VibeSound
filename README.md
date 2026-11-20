@@ -14,6 +14,7 @@ VibeSound is a local [MCP](https://modelcontextprotocol.io) server. It runs on y
 | "pedal thump at 2:12" | `find_problems` to pin the instant, `remove_thump` |
 | "there's a click / tick" | `remove_clicks` (finds them itself, or at times you give) |
 | "a swoosh when the pedal moves" | `remove_swoosh`: turns the cloud of noise back down to the level around it and keeps the note lines |
+| "the whole song is full of swooshes" | `remove_all_swooshes`: finds and removes every one in a single pass, leaving hammer attacks alone |
 | "squeak / creak / hammer noise / chair" | `view` to see it, `spectral_repair` to rebuild just that time-and-frequency box from the audio around it. This is the "paint it away" job from RX, done by Claude instead of by hand |
 | "too much hiss / action rustle" | `denoise`, ideally with a sample of the noise alone |
 | "this little bit is ruined" | `inpaint` (very short stretches for now, see below) or `copy_from_region` to borrow the same bar from a repeat |
