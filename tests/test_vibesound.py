@@ -329,4 +329,4 @@ def test_swoosh_is_removed_but_partials_stay(clean, write_wav):
     win = slice(i + n // 4, i + 3 * n // 4)
     assert band_db(fixed[win] - clean[win], 2500, 12000) < band_db(dirty[win] - clean[win], 2500, 12000) - 4
     assert abs(band_db(fixed[win], 80, 1200) - band_db(clean[win], 80, 1200)) < 0.1
-    assert np.array_equal(fixed[: int(6.0 * SR)], dirty[: int(6.0 * SR)])
+    assert np.array_equal(fixed[: int(6.0 * SR)], s.project.audio(0)[: int(6.0 * SR)])
