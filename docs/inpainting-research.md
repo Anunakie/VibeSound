@@ -70,6 +70,31 @@ Text-to-audio models; inpainting was not part of the open release. Superseded by
 
 VibeSound writes a WAV with six seconds of context on each side, passes the gap position in seconds, reads back a WAV of the same length, and crossfades only the regenerated stretch into the track as a new version. A model can also be registered in-process with `vibesound.inpaint.register(backend)`.
 
+## Working backend: Stable Audio 3 Small (first trial, 2026-11-20)
+
+`scripts/sa3_inpaint.py` plugs Stable Audio 3 into the `external` hook. It runs on CPU: about 45 s for a gap with 10 s of context on each side on 4 cores (50 steps).
+
+Setup:
+
+```
+pip install torch==2.7.1 torchaudio==2.7.1
+pip install git+https://github.com/Stability-AI/stable-audio-3
+hf download stabilityai/stable-audio-3-small-music-base --local-dir ~/models/sa3-small-music-base
+```
+
+Then set `inpaint_command` (or `VIBESOUND_INPAINT_CMD`) to:
+
+```
+python scripts/sa3_inpaint.py --in {input} --out {output} --start {start} --end {end}
+```
+
+Notes from the trial:
+
+- `stable-audio-3-small-music-base` is not gated on Hugging Face (the post-trained `small-music` is). The base checkpoint is also the one LoRA fine-tuning starts from.
+- Use guidance scale 1.0. Values of 4 and 7 produced broadband noise and broke the kept context on CPU with this checkpoint.
+- The script splices only the gap back into the original with 25 ms crossfades and matches loudness to the surrounding context, so nothing outside the gap changes. (The model's autoencoder alone reconstructs context at about -19 dB error, so its full output should never replace the track.)
+- Hugging Face serves weights from `us.aws.cdn.hf.co`; a restricted network must allow that host.
+
 ## Sources
 
 - AMD PyTorch on Windows 7.2 release notes: https://www.amd.com/en/resources/support-articles/release-notes/RN-AMDGPU-WINDOWS-PYTORCH-7-2.html
