@@ -70,8 +70,13 @@ class SA3Inpainter:
         self.base = "base" in Path(model_dir).name
 
     def generate(self, audio: np.ndarray, sr: int, start_s: float, end_s: float, *, prompt=DEFAULT_PROMPT,
-                 negative=DEFAULT_NEGATIVE, steps=None, cfg_scale=None, seed=-1) -> np.ndarray:
-        """Return the model's full-length output (channels last, at ``sr``)."""
+                 negative=DEFAULT_NEGATIVE, steps=None, cfg_scale=None, seed=-1, guide=None) -> np.ndarray:
+        """Return the model's full-length output (channels last, at ``sr``).
+
+        ``guide`` (0-1) keeps the original gap as a blueprint: the model starts from the
+        original audio with that much noise mixed in, so notes and timing survive and only
+        the sound is re-rendered. None means blind inpainting (the gap is guessed from context).
+        """
         import torch
         import torchaudio
 
@@ -91,6 +96,7 @@ class SA3Inpainter:
             cfg_scale=cfg_scale,
             seed=seed,
             inpaint_audio=(self.sr, x),
+            **({"init_audio": (self.sr, x.clone()), "init_noise_level": float(guide)} if guide else {}),
             inpaint_mask_start_seconds=float(start_s),
             inpaint_mask_end_seconds=float(end_s),
         )
@@ -143,6 +149,9 @@ def main(argv=None):
     ap.add_argument("--steps", type=int)
     ap.add_argument("--cfg", type=float)
     ap.add_argument("--seed", type=int, default=-1)
+    ap.add_argument("--guide", type=float, default=None,
+                    help="0-1: re-render the gap from the original at this noise level (keeps notes and timing). "
+                         "Omit for blind inpainting.")
     ap.add_argument("--xfade-ms", type=float, default=25.0)
     ap.add_argument("--threads", type=int)
     args = ap.parse_args(argv)
@@ -151,7 +160,7 @@ def main(argv=None):
     t0 = time.time()
     inp = SA3Inpainter(args.model_dir, args.threads)
     gen = inp.generate(audio, sr, args.start, args.end, prompt=args.prompt, steps=args.steps,
-                       cfg_scale=args.cfg, seed=args.seed)
+                       cfg_scale=args.cfg, seed=args.seed, guide=args.guide)
     out = splice(audio, gen, sr, args.start, args.end, args.xfade_ms)
     sf.write(args.out, out.astype(np.float32), sr, subtype="FLOAT")
     print(f"sa3_inpaint: {args.end - args.start:.2f}s gap in {time.time() - t0:.0f}s", file=sys.stderr)
