@@ -70,6 +70,39 @@ Text-to-audio models; inpainting was not part of the open release. Superseded by
 
 VibeSound writes a WAV with six seconds of context on each side, passes the gap position in seconds, reads back a WAV of the same length, and crossfades only the regenerated stretch into the track as a new version. A model can also be registered in-process with `vibesound.inpaint.register(backend)`.
 
+## Working backend: Stable Audio 3 Small (first trial, 2026-11-20)
+
+`scripts/sa3_inpaint.py` plugs Stable Audio 3 into the `external` hook. It runs on CPU: about 45 s for a gap with 10 s of context on each side on 4 cores (50 steps).
+
+Setup:
+
+```
+pip install torch==2.7.1 torchaudio==2.7.1
+pip install git+https://github.com/Stability-AI/stable-audio-3
+hf download stabilityai/stable-audio-3-small-music-base --local-dir ~/models/sa3-small-music-base
+```
+
+Then set `inpaint_command` (or `VIBESOUND_INPAINT_CMD`) to:
+
+```
+python scripts/sa3_inpaint.py --in {input} --out {output} --start {start} --end {end}
+```
+
+Notes from the trial:
+
+- `stable-audio-3-small-music-base` is not gated on Hugging Face (the post-trained `small-music` is). The base checkpoint is also the one LoRA fine-tuning starts from.
+- Use guidance scale 1.0. Values of 4 and 7 produced broadband noise and broke the kept context on CPU with this checkpoint.
+- The script splices only the gap back into the original with 25 ms crossfades and matches loudness to the surrounding context, so nothing outside the gap changes. (The model's autoencoder alone reconstructs context at about -19 dB error, so its full output should never replace the track.)
+- Hugging Face serves weights from `us.aws.cdn.hf.co`; a restricted network must allow that host.
+
+### Listening verdict and timing check (2026-11-20)
+
+Daniel's verdict on the blind inpaint clips: not usable. The gap sounds like a delay or missing note followed by a strum that does not belong, and the generated notes do not sound like a piano. Measured afterwards: note onsets inside the gap (spectral-flux peaks, 150 Hz to 6 kHz) are moved by 0.3 to 0.5 s, dropped, or have extras added in every 1 s and 2 s gap. The average-spectrum match used to pick candidates (0.96+) was blind to this. **Any generated fill must pass an onset check against the original before anyone listens to it.**
+
+Guided mode (`--guide`, original audio as init at a noise level, 1 s gaps at both booms) has no usable setting: at 0.35 the timing mostly holds but the boom stays (about -1 dB); at 0.55 and 0.75 the boom drops 12 to 17 dB but the onsets are lost again. The autoencoder on its own keeps timing (flux correlation 0.93), so the diffusion model is what loses the notes.
+
+Conclusion: the untuned small base model cannot repair this music. Fine-tune on the C7 recordings before trying again, and keep an onset gate in the loop.
+
 ## Sources
 
 - AMD PyTorch on Windows 7.2 release notes: https://www.amd.com/en/resources/support-articles/release-notes/RN-AMDGPU-WINDOWS-PYTORCH-7-2.html
